@@ -1,0 +1,24 @@
+create table public.orders (
+  "Order ID" text not null,
+  "Order Status" text null,
+  "Order Substatus" text null,
+  "Seller SKU" text null,
+  "Product Name" text null,
+  "Variation" text null,
+  "Quantity" bigint null,
+  "Shipped Time" text null,
+  "Delivered Time" text null,
+  "Warehouse Name" text null,
+  "Tracking ID" text null,
+  product_tag text GENERATED ALWAYS as (
+    case
+      when ("Product Name" ~~ '%./'::text) then 'CPL'::text
+      when ("Product Name" ~~ '%/'::text) then 'BCDL'::text
+      when ("Product Name" ~~ '%.'::text) then 'CP'::text
+      when ("Product Name" ~~ '%\_'::text) then 'BCD'::text
+      else 'BCD'::text
+    end
+  ) STORED null,
+  id bigserial not null,
+  constraint orders_pkey primary key (id)
+) TABLESPACE pg_default;
