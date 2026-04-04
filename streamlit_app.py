@@ -360,7 +360,8 @@ with st.sidebar:
             "เปรียบเทียบรายการสินค้า",
             "กราฟเส้นยอดขายรายวัน",
             "ตะกร้าสินค้าร้าน Sim1 กับ Sim2",
-            "กราฟเทียบยอดขายเฉพาะสินค้ามือ 2"
+            "กราฟเทียบยอดขายเฉพาะสินค้ามือ 2",
+            "นำเข้าข้อมูล"
         ],
         index=0
     )
@@ -1022,3 +1023,125 @@ elif page == "กราฟเทียบยอดขายเฉพาะสิ
                 st.dataframe(df_full_display, use_container_width=True, height=500)
             else:
                 st.info("ไม่สามารถสร้างตารางสรุปได้ เนื่องจากข้อมูลไม่ครบถ้วน")
+
+# =================================================================================
+# CASE 6: IMPORT DATA
+# =================================================================================
+elif page == "นำเข้าข้อมูล":
+    st.markdown(
+        '<div class="shop-header-sarabun">📥 นำเข้าข้อมูลจาก Excel</div>',
+        unsafe_allow_html=True
+    )
+    st.markdown("---")
+
+    ORDERS_COLUMNS = [
+        "Order ID", "Order Status", "Order Substatus", "Seller SKU",
+        "Product Name", "Variation", "Quantity", "Shipped Time",
+        "Delivered Time", "Warehouse Name", "Tracking ID"
+    ]
+
+    STOCK_COLUMNS = ["id", "product_name", "stock_qty"]
+
+    tab_orders, tab_stock = st.tabs(["📦 Orders (สรุปคำสั่งซื้อ)", "📋 Secondhand Stock (คงเหลือมือ 2)"])
+
+    # ------------------------------------------------------------------
+    # TAB 1 — Orders import (upsert on Order ID)
+    # ------------------------------------------------------------------
+    with tab_orders:
+        st.markdown("#### อัปโหลดไฟล์ Excel สรุปคำสั่งซื้อ")
+        st.caption("พบ Order ID ซ้ำ → อัปเดตข้อมูล | ไม่พบ → เพิ่มแถวใหม่")
+
+        orders_file = st.file_uploader(
+            "เลือกไฟล์ .xlsx สำหรับตาราง orders",
+            type=["xlsx"],
+            key="orders_uploader"
+        )
+
+        if orders_file is not None:
+            try:
+                df_upload = pd.read_excel(orders_file, dtype=str)
+                df_upload.columns = df_upload.columns.str.strip()
+
+                missing = [c for c in ORDERS_COLUMNS if c not in df_upload.columns]
+                if missing:
+                    st.error(f"ไฟล์ขาดคอลัมน์: {missing}")
+                else:
+                    df_upload = df_upload[ORDERS_COLUMNS].copy()
+                    df_upload["Quantity"] = pd.to_numeric(df_upload["Quantity"], errors="coerce")
+
+                    st.write(f"พบข้อมูลทั้งหมด **{len(df_upload):,}** แถว")
+                    st.dataframe(df_upload.head(10), use_container_width=True)
+
+                    if st.button("นำเข้าข้อมูล Orders", type="primary", key="btn_import_orders"):
+                        engine = init_connection()
+                        upload_order_ids = df_upload["Order ID"].dropna().unique().tolist()
+
+                        with engine.begin() as conn:
+                            # Delete existing rows that match uploaded Order IDs (upsert via delete+insert)
+                            conn.execute(
+                                text('DELETE FROM orders WHERE "Order ID" = ANY(:ids)'),
+                                {"ids": upload_order_ids}
+                            )
+                            df_upload.to_sql(
+                                "orders",
+                                conn,
+                                if_exists="append",
+                                index=False,
+                                method="multi"
+                            )
+
+                        st.success(f"นำเข้าสำเร็จ {len(df_upload):,} แถว (อัปเดต/เพิ่มใหม่)")
+                        st.cache_data.clear()
+
+            except Exception as e:
+                logger.error("Orders import failed: %s", e)
+                st.error(f"เกิดข้อผิดพลาด: {e}")
+
+    # ------------------------------------------------------------------
+    # TAB 2 — Secondhand stock import (truncate + insert)
+    # ------------------------------------------------------------------
+    with tab_stock:
+        st.markdown("#### อัปโหลดไฟล์ Excel สินค้ามือ 2 คงเหลือ")
+        st.caption("ระบบจะ **Truncate** ตาราง secondhand_stock ก่อน แล้วนำเข้าข้อมูลใหม่ทั้งหมด")
+
+        stock_file = st.file_uploader(
+            "เลือกไฟล์ .xlsx สำหรับตาราง secondhand_stock",
+            type=["xlsx"],
+            key="stock_uploader"
+        )
+
+        if stock_file is not None:
+            try:
+                df_stock = pd.read_excel(stock_file, dtype=str)
+                df_stock.columns = df_stock.columns.str.strip()
+
+                missing = [c for c in STOCK_COLUMNS if c not in df_stock.columns]
+                if missing:
+                    st.error(f"ไฟล์ขาดคอลัมน์: {missing}")
+                else:
+                    df_stock = df_stock[STOCK_COLUMNS].copy()
+                    df_stock["stock_qty"] = pd.to_numeric(df_stock["stock_qty"], errors="coerce")
+
+                    st.write(f"พบข้อมูลทั้งหมด **{len(df_stock):,}** แถว")
+                    st.dataframe(df_stock.head(10), use_container_width=True)
+
+                    st.warning("⚠️ การนำเข้าจะลบข้อมูลเดิมทั้งหมดในตาราง secondhand_stock")
+
+                    if st.button("นำเข้าข้อมูล Secondhand Stock", type="primary", key="btn_import_stock"):
+                        engine = init_connection()
+                        with engine.begin() as conn:
+                            conn.execute(text("TRUNCATE TABLE secondhand_stock RESTART IDENTITY"))
+                            df_stock.to_sql(
+                                "secondhand_stock",
+                                conn,
+                                if_exists="append",
+                                index=False,
+                                method="multi"
+                            )
+
+                        st.success(f"นำเข้าสำเร็จ {len(df_stock):,} แถว (ล้างข้อมูลเดิมและนำเข้าใหม่)")
+                        st.cache_data.clear()
+
+            except Exception as e:
+                logger.error("Secondhand stock import failed: %s", e)
+                st.error(f"เกิดข้อผิดพลาด: {e}")
